@@ -41,10 +41,12 @@ function Viewer() {
   const [isPanning, setIsPanning] = useState(false)
   const requestId = useRef(0)
   const previewRef = useRef<HTMLDivElement>(null)
+  const previewSpacerRef = useRef<HTMLDivElement>(null)
   const previewPositionRef = useRef<HTMLDivElement>(null)
   const previewStageRef = useRef<HTMLDivElement>(null)
   const viewFrameRef = useRef(0)
   const viewRef = useRef({ zoom: 100, x: 0, y: 0 })
+  const diagramSizeRef = useRef({ width: 0, height: 0 })
   const isPanningRef = useRef(false)
   const panStart = useRef({
     pointerId: 0,
@@ -54,27 +56,58 @@ function Viewer() {
     panY: 0,
   })
 
+  const getVerticalScrollRange = useCallback((zoomLevel = viewRef.current.zoom) => {
+    const preview = previewRef.current
+    const diagramHeight = diagramSizeRef.current.height
+    if (!preview || !diagramHeight) return 0
+
+    const scaledHeight = diagramHeight * (zoomLevel / 100)
+    return Math.max(0, Math.ceil(scaledHeight - preview.clientHeight))
+  }, [])
+
   const scheduleViewUpdate = useCallback(() => {
     if (viewFrameRef.current) return
 
     viewFrameRef.current = window.requestAnimationFrame(() => {
       viewFrameRef.current = 0
       const view = viewRef.current
+      const preview = previewRef.current
+      let scrollTop = preview?.scrollTop ?? 0
+
+      if (preview && previewSpacerRef.current) {
+        const scrollRange = getVerticalScrollRange(view.zoom)
+        previewSpacerRef.current.style.height = `${preview.clientHeight + scrollRange}px`
+
+        if (!isPanningRef.current) {
+          const nextScrollTop = Math.min(
+            scrollRange,
+            Math.max(0, scrollRange / 2 - view.y),
+          )
+
+          if (Math.abs(preview.scrollTop - nextScrollTop) > 0.5) {
+            preview.scrollTop = nextScrollTop
+          }
+        }
+
+        scrollTop = preview.scrollTop
+      }
+
       if (previewPositionRef.current) {
-        previewPositionRef.current.style.transform = `translate3d(${view.x}px, ${view.y}px, 0)`
+        previewPositionRef.current.style.transform = `translate3d(${view.x}px, ${view.y + scrollTop}px, 0)`
       }
       if (previewStageRef.current) {
         previewStageRef.current.style.transform = `translate3d(-50%, -50%, 0) scale(${view.zoom / 100})`
       }
       setZoom(view.zoom)
     })
-  }, [])
+  }, [getVerticalScrollRange])
 
   const setPreviewPositionNode = useCallback((node: HTMLDivElement | null) => {
     previewPositionRef.current = node
     if (node) {
       const view = viewRef.current
-      node.style.transform = `translate3d(${view.x}px, ${view.y}px, 0)`
+      const scrollTop = previewRef.current?.scrollTop ?? 0
+      node.style.transform = `translate3d(${view.x}px, ${view.y + scrollTop}px, 0)`
     }
   }, [])
 
@@ -282,12 +315,44 @@ function Viewer() {
     scheduleViewUpdate()
   }
 
+  const handlePreviewScroll = (event: React.UIEvent<HTMLDivElement>) => {
+    if (!svgUrl) return
+    const scrollRange = getVerticalScrollRange()
+    const nextY = scrollRange / 2 - event.currentTarget.scrollTop
+    if (Math.abs(viewRef.current.y - nextY) < 0.5) return
+
+    viewRef.current = {
+      ...viewRef.current,
+      y: nextY,
+    }
+    scheduleViewUpdate()
+  }
+
+  const handleDiagramLoad = (event: React.SyntheticEvent<HTMLImageElement>) => {
+    const image = event.currentTarget
+    diagramSizeRef.current = {
+      width: image.naturalWidth,
+      height: image.naturalHeight,
+    }
+    scheduleViewUpdate()
+  }
+
   const handlePreviewPointerDown = (
     event: React.PointerEvent<HTMLDivElement>,
   ) => {
     if (!svgUrl || (event.button !== 0 && event.button !== 1)) return
-    event.preventDefault()
     const preview = event.currentTarget
+    const previewBounds = preview.getBoundingClientRect()
+    const scrollbarWidth = preview.offsetWidth - preview.clientWidth
+
+    if (
+      scrollbarWidth > 0 &&
+      event.clientX >= previewBounds.right - scrollbarWidth
+    ) {
+      return
+    }
+
+    event.preventDefault()
     panStart.current = {
       pointerId: event.pointerId,
       x: event.clientX,
@@ -319,6 +384,7 @@ function Viewer() {
     }
     isPanningRef.current = false
     setIsPanning(false)
+    scheduleViewUpdate()
   }
 
   return (
@@ -380,13 +446,16 @@ function Viewer() {
             onPointerMove={handlePreviewPointerMove}
             onPointerUp={stopPreviewPan}
             onPointerCancel={stopPreviewPan}
+            onScroll={handlePreviewScroll}
             onContextMenu={(event) => event.preventDefault()}
           >
             {svgUrl ? (
-              <div
-                ref={setPreviewPositionNode}
-                className="viewer-preview-position"
-              >
+              <>
+                <div ref={previewSpacerRef} className="viewer-preview-scroll-spacer" aria-hidden="true" />
+                <div
+                  ref={setPreviewPositionNode}
+                  className="viewer-preview-position"
+                >
                 <div
                   ref={setPreviewStageNode}
                   className="viewer-preview-stage"
@@ -395,9 +464,11 @@ function Viewer() {
                     src={svgUrl}
                     alt="Rendered PlantUML diagram"
                     draggable={false}
+                    onLoad={handleDiagramLoad}
                   />
                 </div>
-              </div>
+                </div>
+              </>
             ) : (
               <div className="viewer-empty-state">
                 <span aria-hidden="true">◇</span>
@@ -410,7 +481,7 @@ function Viewer() {
           <div className={`viewer-status-bar viewer-status-${status}`}>
             <span className="viewer-status-dot" aria-hidden="true" />
             <span>{message}</span>
-            <span className="viewer-navigation-hint">Drag to pan · Scroll to zoom</span>
+            <span className="viewer-navigation-hint">Drag to pan · Mouse wheel to zoom · Scrollbar moves vertically</span>
           </div>
         </div>
       </section>
