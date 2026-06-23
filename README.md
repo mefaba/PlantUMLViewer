@@ -11,7 +11,7 @@ pnpm install
 pnpm dev
 ```
 
-Paste PlantUML into the editor and the preview updates automatically. Use `Ctrl+Enter` (or `Cmd+Enter`) to render immediately. The generated SVG can also be downloaded.
+Paste PlantUML into the editor and the preview updates automatically. Use `Ctrl+Enter` (or `Cmd+Enter`) to render immediately. The generated diagram can be downloaded as SVG or PNG.
 
 For a production build and local preview:
 

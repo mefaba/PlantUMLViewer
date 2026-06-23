@@ -11,11 +11,16 @@ const maxSourceBytes = 1_000_000
 const maxOutputBytes = 12_000_000
 
 type PlantUmlResult = {
-  svg: string
+  output: Buffer
   error?: string
 }
 
-function renderPlantUml(source: string): Promise<PlantUmlResult> {
+type RenderFormat = 'svg' | 'png'
+
+function renderPlantUml(
+  source: string,
+  format: RenderFormat,
+): Promise<PlantUmlResult> {
   return new Promise((resolve, reject) => {
     if (!existsSync(plantUmlJar)) {
       reject(new Error(`PlantUML JAR was not found at ${plantUmlJar}`))
@@ -29,7 +34,7 @@ function renderPlantUml(source: string): Promise<PlantUmlResult> {
         '-jar',
         plantUmlJar,
         '-pipe',
-        '-tsvg',
+        format === 'png' ? '-tpng' : '-tsvg',
         '-charset',
         'UTF-8',
       ],
@@ -75,13 +80,20 @@ function renderPlantUml(source: string): Promise<PlantUmlResult> {
       if (settled) return
       settled = true
 
-      const svg = Buffer.concat(stdout).toString('utf8').trim()
+      const output = Buffer.concat(stdout)
       const errorOutput = Buffer.concat(stderr).toString('utf8').trim()
-      if (!svg.includes('<svg')) {
+      const svgStart = format === 'svg' ? output.indexOf('<svg') : -1
+      const isPng =
+        format === 'png' &&
+        output.length >= 8 &&
+        output.subarray(0, 8).equals(
+          Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+        )
+      if ((format === 'svg' && svgStart === -1) || (format === 'png' && !isPng)) {
         reject(
           new Error(
             errorOutput ||
-              `PlantUML exited with code ${code ?? 'unknown'} without an SVG`,
+              `PlantUML exited with code ${code ?? 'unknown'} without a ${format.toUpperCase()} image`,
           ),
         )
         return
@@ -94,7 +106,7 @@ function renderPlantUml(source: string): Promise<PlantUmlResult> {
         .at(-1)
 
       resolve({
-        svg: svg.slice(svg.indexOf('<svg')),
+        output: format === 'svg' ? output.subarray(svgStart) : output,
         error: code === 0 ? undefined : errorMessage || 'PlantUML syntax error',
       })
     })
@@ -142,14 +154,20 @@ async function renderHandler(
       return
     }
 
-    const result = await renderPlantUml(source)
+    const format: RenderFormat = request.headers.accept?.includes('image/png')
+      ? 'png'
+      : 'svg'
+    const result = await renderPlantUml(source, format)
     response.statusCode = 200
-    response.setHeader('Content-Type', 'image/svg+xml; charset=utf-8')
+    response.setHeader(
+      'Content-Type',
+      format === 'png' ? 'image/png' : 'image/svg+xml; charset=utf-8',
+    )
     response.setHeader('Cache-Control', 'no-store')
     if (result.error) {
       response.setHeader('X-PlantUML-Error', encodeURIComponent(result.error))
     }
-    response.end(result.svg)
+    response.end(result.output)
   } catch (error) {
     response.statusCode = 500
     response.setHeader('Content-Type', 'text/plain; charset=utf-8')

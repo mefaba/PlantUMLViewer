@@ -61,6 +61,11 @@ body {
   gap: 14px;
 }
 
+.viewer-download-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .viewer-brand-mark {
   width: 42px;
   height: 42px;
@@ -374,6 +379,7 @@ body {
 @media (max-width: 560px) {
   .viewer-topbar { align-items: flex-start; }
   .viewer-brand p { display: none; }
+  .viewer-download-actions { flex-direction: column; }
   .viewer-preview-canvas { padding: 22px; }
   .viewer-panel-footer span:last-child { display: none; }
 }

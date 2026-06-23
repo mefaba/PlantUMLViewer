@@ -24,6 +24,7 @@ function Viewer() {
   const [status, setStatus] = useState<RenderState>('idle')
   const [message, setMessage] = useState('Ready to render')
   const [zoom, setZoom] = useState(100)
+  const [isDownloadingPng, setIsDownloadingPng] = useState(false)
   const requestId = useRef(0)
 
   const renderDiagram = useCallback(async (diagramSource: string) => {
@@ -104,6 +105,39 @@ function Viewer() {
     URL.revokeObjectURL(link.href)
   }
 
+  const downloadPng = async () => {
+    if (!source.trim() || isDownloadingPng) return
+    setIsDownloadingPng(true)
+
+    try {
+      const response = await fetch('/api/render', {
+        method: 'POST',
+        headers: {
+          Accept: 'image/png',
+          'Content-Type': 'text/plain; charset=utf-8',
+        },
+        body: source,
+      })
+
+      if (!response.ok) {
+        throw new Error((await response.text()) || 'Unable to render PNG')
+      }
+
+      const link = document.createElement('a')
+      link.href = URL.createObjectURL(await response.blob())
+      link.download = 'diagram.png'
+      link.click()
+      URL.revokeObjectURL(link.href)
+    } catch (error) {
+      setStatus('error')
+      setMessage(
+        error instanceof Error ? error.message : 'Unable to download PNG',
+      )
+    } finally {
+      setIsDownloadingPng(false)
+    }
+  }
+
   const handleEditorKeyDown = (
     event: React.KeyboardEvent<HTMLTextAreaElement>,
   ) => {
@@ -134,9 +168,14 @@ function Viewer() {
             <p>Local rendering with PlantUML 1.2026.6</p>
           </div>
         </div>
-        <button className="viewer-button viewer-button-secondary" type="button" onClick={downloadSvg} disabled={!svgText}>
-          Download SVG
-        </button>
+        <div className="viewer-download-actions">
+          <button className="viewer-button viewer-button-secondary" type="button" onClick={downloadSvg} disabled={!svgText}>
+            Download SVG
+          </button>
+          <button className="viewer-button viewer-button-secondary" type="button" onClick={() => void downloadPng()} disabled={!svgText || isDownloadingPng}>
+            {isDownloadingPng ? 'Creating PNG…' : 'Download PNG'}
+          </button>
+        </div>
       </header>
 
       <section className="viewer-workspace">
