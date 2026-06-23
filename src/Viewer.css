@@ -226,23 +226,50 @@ body {
 }
 
 .viewer-editor-wrap {
+  --viewer-editor-padding: 24px;
+  --viewer-editor-line-height: 24.08px;
   min-height: 400px;
   flex: 1;
+  position: relative;
+  overflow: hidden;
   background: linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px) 0 0 / 42px 42px, var(--viewer-editor);
 }
 
+.viewer-source-highlight-layer {
+  position: absolute;
+  inset: var(--viewer-editor-padding) 0 0 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.viewer-source-highlight-line {
+  position: absolute;
+  left: var(--viewer-editor-padding);
+  right: var(--viewer-editor-padding);
+  top: 0;
+  height: var(--viewer-editor-line-height);
+  box-sizing: border-box;
+  border-left: 3px solid var(--viewer-accent);
+  border-radius: 5px;
+  background: rgba(116, 240, 181, 0.16);
+  box-shadow: 0 0 0 1px rgba(116, 240, 181, 0.06) inset;
+}
+
 .viewer-editor-wrap textarea {
+  position: relative;
+  z-index: 1;
   width: 100%;
   height: 100%;
   min-height: 400px;
-  padding: 24px;
+  padding: var(--viewer-editor-padding);
   resize: none;
   box-sizing: border-box;
   border: 0;
   outline: 0;
   color: #d7dee7;
   background: transparent;
-  font: 14px/1.72 var(--viewer-mono);
+  font: 14px/var(--viewer-editor-line-height) var(--viewer-mono);
   tab-size: 2;
   caret-color: var(--viewer-accent);
 }
@@ -361,15 +388,16 @@ body {
   transform: translate3d(-50%, -50%, 0);
   transform-origin: center;
   will-change: transform;
+  pointer-events: none;
 }
 
-.viewer-preview-stage img {
+.viewer-preview-stage svg {
   width: auto;
   height: auto;
   max-width: none;
   display: block;
   filter: drop-shadow(0 12px 22px rgba(16, 24, 21, 0.15));
-  pointer-events: none;
+  overflow: visible;
 }
 
 .viewer-empty-state {

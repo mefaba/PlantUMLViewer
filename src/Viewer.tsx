@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './Viewer.css'
 
 const starterDiagram = `@startuml
@@ -17,9 +17,301 @@ App --> User: Show the result
 
 type RenderState = 'idle' | 'rendering' | 'ready' | 'error'
 
+type SourceRange = {
+  startLine: number
+  endLine: number
+}
+
+type SourceIndexEntry = SourceRange & {
+  labels: string[]
+  priority: number
+}
+
+type DiagramSize = {
+  width: number
+  height: number
+}
+
 const minZoom = 10
 const maxZoom = 2000
 const sourceStorageKey = 'plantuml-viewer.source.v1'
+
+function normalizeLabel(value: string) {
+  return value
+    .replace(/\\n/g, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/[*_`~]/g, '')
+    .replace(/["'{}()[\],]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLocaleLowerCase()
+}
+
+function stripPlantUmlMarkup(value: string) {
+  return value
+    .replace(/#.*/, '')
+    .replace(/\+\+|--/g, '')
+    .trim()
+}
+
+function addSourceEntry(
+  entries: SourceIndexEntry[],
+  labels: string[],
+  range: SourceRange,
+  priority: number,
+) {
+  const cleanLabels = labels
+    .map(stripPlantUmlMarkup)
+    .map((label) => label.replace(/^"|"$/g, '').trim())
+    .filter((label) => normalizeLabel(label).length >= 2)
+
+  if (cleanLabels.length) {
+    entries.push({ ...range, labels: cleanLabels, priority })
+  }
+}
+
+function buildSourceIndex(source: string) {
+  const lines = source.split('\n')
+  const entries: SourceIndexEntry[] = []
+  let titleStart: number | null = null
+  let noteStart: number | null = null
+  const declarationPattern = /^\s*(actor|participant|boundary|control|entity|database|collections|queue)\s+(?:"([^"]+)"|([^\s#]+))(?:\s+as\s+([\w.$-]+))?/i
+
+  lines.forEach((line, index) => {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith("'")) return
+
+    if (/^title\b/i.test(trimmed)) {
+      titleStart = index
+      const inlineTitle = trimmed.replace(/^title\b/i, '').trim()
+      addSourceEntry(entries, [inlineTitle], { startLine: index, endLine: index }, 80)
+      return
+    }
+
+    if (/^end\s+title\b/i.test(trimmed)) {
+      titleStart = null
+      return
+    }
+
+    if (titleStart !== null) {
+      addSourceEntry(entries, [trimmed], { startLine: index, endLine: index }, 80)
+      return
+    }
+
+    if (/^note\b/i.test(trimmed)) {
+      noteStart = index
+      const inlineNote = trimmed.includes(':') ? trimmed.slice(trimmed.indexOf(':') + 1) : ''
+      addSourceEntry(entries, [inlineNote], { startLine: index, endLine: index }, 72)
+      return
+    }
+
+    if (/^end\s+note\b/i.test(trimmed)) {
+      noteStart = null
+      return
+    }
+
+    if (noteStart !== null) {
+      addSourceEntry(entries, [trimmed], { startLine: index, endLine: index }, 72)
+      return
+    }
+
+    const declaration = trimmed.match(declarationPattern)
+    if (declaration) {
+      const label = declaration[2] || declaration[3] || ''
+      const alias = declaration[4] || label
+      addSourceEntry(entries, [label, alias], { startLine: index, endLine: index }, 90)
+      return
+    }
+
+    const box = trimmed.match(/^box\s+"?([^"#]+)"?/i)
+    if (box) {
+      addSourceEntry(entries, [box[1]], { startLine: index, endLine: index }, 65)
+      return
+    }
+
+    const separator = trimmed.match(/^==\s*(.*?)\s*==$/)
+    if (separator) {
+      addSourceEntry(entries, [separator[1]], { startLine: index, endLine: index }, 78)
+      return
+    }
+
+    const group = trimmed.match(/^(alt|else|break|loop|opt|par|critical|group)\b\s*(.*)$/i)
+    if (group) {
+      addSourceEntry(entries, [group[2]], { startLine: index, endLine: index }, 76)
+      return
+    }
+
+    if (/[-.]+[>x]|[<x][-.]+/.test(trimmed) && trimmed.includes(':')) {
+      const label = trimmed.slice(trimmed.indexOf(':') + 1).trim()
+      addSourceEntry(entries, [label], { startLine: index, endLine: index }, 100)
+    }
+  })
+
+  return entries
+}
+
+function findSourceMatch(label: string, entries: SourceIndexEntry[]): SourceRange | null {
+  const normalizedLabel = normalizeLabel(label)
+  if (normalizedLabel.length < 2) return null
+
+  let bestEntry: SourceIndexEntry | null = null
+  let bestScore = 0
+
+  for (const entry of entries) {
+    for (const candidate of entry.labels) {
+      const normalizedCandidate = normalizeLabel(candidate)
+      if (normalizedCandidate.length < 2) continue
+
+      let score = 0
+      if (normalizedCandidate === normalizedLabel) {
+        score = 120
+      } else if (normalizedCandidate.includes(normalizedLabel)) {
+        score = 80 + Math.min(normalizedLabel.length, 30)
+      } else if (normalizedLabel.includes(normalizedCandidate) && normalizedCandidate.length >= 4) {
+        score = 64 + Math.min(normalizedCandidate.length, 24)
+      } else {
+        const labelParts = normalizedLabel.split(' ').filter((part) => part.length >= 3)
+        const candidateParts = normalizedCandidate.split(' ').filter((part) => part.length >= 3)
+        const overlap = labelParts.filter((part) => candidateParts.includes(part)).length
+        if (overlap && labelParts.length) {
+          score = 42 + overlap * 12
+        }
+      }
+
+      score += entry.priority
+
+      if (score > bestScore) {
+        bestScore = score
+        bestEntry = entry
+      }
+    }
+  }
+
+  return bestEntry && bestScore >= 105
+    ? { startLine: bestEntry.startLine, endLine: bestEntry.endLine }
+    : null
+}
+
+function sanitizeSvg(svgText: string) {
+  const document = new DOMParser().parseFromString(svgText, 'image/svg+xml')
+  const parserError = document.querySelector('parsererror')
+  if (parserError) return ''
+
+  document.querySelectorAll('script, foreignObject').forEach((element) => element.remove())
+
+  document.querySelectorAll('*').forEach((element) => {
+    for (const attribute of [...element.attributes]) {
+      const name = attribute.name.toLocaleLowerCase()
+      const value = attribute.value.trim()
+
+      if (
+        name.startsWith('on') ||
+        /(?:javascript|vbscript):/i.test(value) ||
+        /url\(\s*["']?(?:javascript|vbscript):/i.test(value) ||
+        (name.endsWith('href') && /^data:/i.test(value))
+      ) {
+        element.removeAttribute(attribute.name)
+      }
+    }
+  })
+
+  const root = document.documentElement
+  root.setAttribute('role', 'img')
+  root.setAttribute('aria-label', 'Rendered PlantUML diagram')
+  return new XMLSerializer().serializeToString(root)
+}
+
+function getSvgSize(svgText: string): DiagramSize {
+  if (!svgText) return { width: 0, height: 0 }
+  const document = new DOMParser().parseFromString(svgText, 'image/svg+xml')
+  const svg = document.querySelector('svg')
+  if (!svg) return { width: 0, height: 0 }
+
+  const width = Number.parseFloat(svg.getAttribute('width') || '')
+  const height = Number.parseFloat(svg.getAttribute('height') || '')
+  if (Number.isFinite(width) && Number.isFinite(height)) {
+    return { width, height }
+  }
+
+  const viewBox = svg.getAttribute('viewBox')?.split(/\s+/).map(Number)
+  if (viewBox?.length === 4 && Number.isFinite(viewBox[2]) && Number.isFinite(viewBox[3])) {
+    return { width: viewBox[2], height: viewBox[3] }
+  }
+
+  return { width: 0, height: 0 }
+}
+
+function rangesEqual(first: SourceRange | null, second: SourceRange | null) {
+  return first?.startLine === second?.startLine && first?.endLine === second?.endLine
+}
+
+function scrollSourceRangeIntoView(editor: HTMLTextAreaElement, range: SourceRange) {
+  const computedStyle = window.getComputedStyle(editor)
+  const lineHeight = Number.parseFloat(computedStyle.lineHeight) || 24
+  const paddingTop = Number.parseFloat(computedStyle.paddingTop) || 0
+  const targetLineTop = paddingTop + range.startLine * lineHeight
+  const targetLineBottom = paddingTop + (range.endLine + 1) * lineHeight
+  const visibleTop = editor.scrollTop
+  const visibleBottom = visibleTop + editor.clientHeight
+  const comfortPadding = lineHeight * 3
+
+  if (
+    targetLineTop >= visibleTop + comfortPadding &&
+    targetLineBottom <= visibleBottom - comfortPadding
+  ) {
+    return
+  }
+
+  const targetScrollTop = Math.max(
+    0,
+    targetLineTop - editor.clientHeight / 2 + lineHeight / 2,
+  )
+
+  editor.scrollTo({ top: targetScrollTop, behavior: 'smooth' })
+}
+
+function resolvePreviewSourceRange(
+  event: React.PointerEvent<HTMLDivElement>,
+  stage: HTMLDivElement | null,
+  sourceIndex: SourceIndexEntry[],
+) {
+  if (!stage) return null
+
+  const target = event.target instanceof Element ? event.target : null
+  const directText = target?.closest('text')
+  if (directText && stage.contains(directText)) {
+    return findSourceMatch(directText.textContent?.trim() || '', sourceIndex)
+  }
+
+  let bestLabel = ''
+  let bestDistance = Number.POSITIVE_INFINITY
+  stage.querySelectorAll('text').forEach((textElement) => {
+    const text = textElement.textContent?.trim()
+    if (!text) return
+
+    const bounds = textElement.getBoundingClientRect()
+    if (!bounds.width || !bounds.height) return
+
+    const horizontalDistance = Math.max(
+      bounds.left - event.clientX,
+      event.clientX - bounds.right,
+      0,
+    )
+    const verticalDistance = Math.max(
+      bounds.top - event.clientY,
+      event.clientY - bounds.bottom,
+      0,
+    )
+    const distance = Math.hypot(horizontalDistance, verticalDistance)
+
+    if (distance < bestDistance) {
+      bestDistance = distance
+      bestLabel = text
+    }
+  })
+
+  return bestDistance <= 36 ? findSourceMatch(bestLabel, sourceIndex) : null
+}
 
 function loadSavedSource() {
   try {
@@ -31,7 +323,6 @@ function loadSavedSource() {
 
 function Viewer() {
   const [source, setSource] = useState(loadSavedSource)
-  const [svgUrl, setSvgUrl] = useState('')
   const [svgText, setSvgText] = useState('')
   const [status, setStatus] = useState<RenderState>('idle')
   const [message, setMessage] = useState('Ready to render')
@@ -39,7 +330,22 @@ function Viewer() {
   const [isDownloadingPng, setIsDownloadingPng] = useState(false)
   const [isSourceCollapsed, setIsSourceCollapsed] = useState(false)
   const [isPanning, setIsPanning] = useState(false)
+  const [highlightedSourceRange, setHighlightedSourceRange] = useState<SourceRange | null>(null)
+  const [editorScrollTop, setEditorScrollTop] = useState(0)
+  const sanitizedSvg = useMemo(() => sanitizeSvg(svgText), [svgText])
+  const svgSize = useMemo(() => getSvgSize(sanitizedSvg), [sanitizedSvg])
+  const sourceIndex = useMemo(() => buildSourceIndex(source), [source])
+  const sourceLineCount = useMemo(() => source.split('\n').length, [source])
+  const highlightedLines = useMemo(() => {
+    if (!highlightedSourceRange) return []
+    return Array.from(
+      { length: highlightedSourceRange.endLine - highlightedSourceRange.startLine + 1 },
+      (_, index) => highlightedSourceRange.startLine + index,
+    )
+  }, [highlightedSourceRange])
+  const hasRenderedSvg = Boolean(sanitizedSvg)
   const requestId = useRef(0)
+  const editorRef = useRef<HTMLTextAreaElement>(null)
   const previewRef = useRef<HTMLDivElement>(null)
   const previewSpacerRef = useRef<HTMLDivElement>(null)
   const previewPositionRef = useRef<HTMLDivElement>(null)
@@ -55,6 +361,7 @@ function Viewer() {
     panX: 0,
     panY: 0,
   })
+  const didDragPreviewRef = useRef(false)
 
   const getVerticalScrollRange = useCallback((zoomLevel = viewRef.current.zoom) => {
     const preview = previewRef.current
@@ -125,10 +432,7 @@ function Viewer() {
       setStatus('idle')
       setMessage('Paste some PlantUML to begin')
       setSvgText('')
-      setSvgUrl((previousUrl) => {
-        if (previousUrl) URL.revokeObjectURL(previousUrl)
-        return ''
-      })
+      setHighlightedSourceRange(null)
       return
     }
 
@@ -149,15 +453,9 @@ function Viewer() {
       }
 
       const plantUmlError = response.headers.get('X-PlantUML-Error')
-      const blobUrl = URL.createObjectURL(
-        new Blob([renderedSvg], { type: 'image/svg+xml' }),
-      )
 
       setSvgText(renderedSvg)
-      setSvgUrl((previousUrl) => {
-        if (previousUrl) URL.revokeObjectURL(previousUrl)
-        return blobUrl
-      })
+      setHighlightedSourceRange(null)
       setStatus(plantUmlError ? 'error' : 'ready')
       setMessage(
         plantUmlError
@@ -188,56 +486,17 @@ function Viewer() {
 
   useEffect(
     () => () => {
-      if (svgUrl) URL.revokeObjectURL(svgUrl)
       if (viewFrameRef.current) {
         window.cancelAnimationFrame(viewFrameRef.current)
       }
     },
-    [svgUrl],
+    [],
   )
 
   useEffect(() => {
-    const preview = previewRef.current
-    if (!preview) return
-
-    const handleWheel = (event: WheelEvent) => {
-      if (!svgUrl) return
-      event.preventDefault()
-
-      const rect = preview.getBoundingClientRect()
-      const pointerX = event.clientX - rect.left
-      const pointerY = event.clientY - rect.top
-      const delta =
-        event.deltaY *
-        (event.deltaMode === WheelEvent.DOM_DELTA_LINE
-          ? 16
-          : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
-            ? preview.clientHeight
-            : 1)
-      const currentView = viewRef.current
-      const nextZoom = Math.min(
-        maxZoom,
-        Math.max(minZoom, currentView.zoom * Math.exp(-delta * 0.0015)),
-      )
-      const ratio = nextZoom / currentView.zoom
-      const centeredPointerX = pointerX - preview.clientWidth / 2
-      const centeredPointerY = pointerY - preview.clientHeight / 2
-
-      viewRef.current = {
-        zoom: nextZoom,
-        x:
-          centeredPointerX -
-          (centeredPointerX - currentView.x) * ratio,
-        y:
-          centeredPointerY -
-          (centeredPointerY - currentView.y) * ratio,
-      }
-      scheduleViewUpdate()
-    }
-
-    preview.addEventListener('wheel', handleWheel, { passive: false })
-    return () => preview.removeEventListener('wheel', handleWheel)
-  }, [isSourceCollapsed, scheduleViewUpdate, svgUrl])
+    diagramSizeRef.current = svgSize
+    scheduleViewUpdate()
+  }, [scheduleViewUpdate, svgSize])
 
   const downloadSvg = () => {
     if (!svgText) return
@@ -315,8 +574,70 @@ function Viewer() {
     scheduleViewUpdate()
   }
 
+  const updateSourceHighlightFromPreview = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!hasRenderedSvg || isSourceCollapsed) return
+
+    const nextRange = resolvePreviewSourceRange(event, previewStageRef.current, sourceIndex)
+    setHighlightedSourceRange((currentRange) => {
+      if (rangesEqual(currentRange, nextRange)) return currentRange
+      return nextRange
+    })
+  }
+
+  const handlePreviewClick = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (
+      !hasRenderedSvg ||
+      isSourceCollapsed ||
+      isPanningRef.current ||
+      didDragPreviewRef.current ||
+      !editorRef.current
+    ) return
+
+    const nextRange = resolvePreviewSourceRange(event, previewStageRef.current, sourceIndex)
+    if (nextRange) {
+      setHighlightedSourceRange(nextRange)
+      scrollSourceRangeIntoView(editorRef.current, nextRange)
+    }
+  }
+
+  const handlePreviewWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    if (!hasRenderedSvg) return
+    event.preventDefault()
+
+    const preview = event.currentTarget
+    const rect = preview.getBoundingClientRect()
+    const pointerX = event.clientX - rect.left
+    const pointerY = event.clientY - rect.top
+    const delta =
+      event.deltaY *
+      (event.deltaMode === 1
+        ? 16
+        : event.deltaMode === 2
+          ? preview.clientHeight
+          : 1)
+    const currentView = viewRef.current
+    const nextZoom = Math.min(
+      maxZoom,
+      Math.max(minZoom, currentView.zoom * Math.exp(-delta * 0.0015)),
+    )
+    const ratio = nextZoom / currentView.zoom
+    const centeredPointerX = pointerX - preview.clientWidth / 2
+    const centeredPointerY = pointerY - preview.clientHeight / 2
+
+    viewRef.current = {
+      zoom: nextZoom,
+      x:
+        centeredPointerX -
+        (centeredPointerX - currentView.x) * ratio,
+      y:
+        centeredPointerY -
+        (centeredPointerY - currentView.y) * ratio,
+    }
+    scheduleViewUpdate()
+  }
+
   const handlePreviewScroll = (event: React.UIEvent<HTMLDivElement>) => {
-    if (!svgUrl) return
+    if (!hasRenderedSvg) return
     const scrollRange = getVerticalScrollRange()
     const nextY = scrollRange / 2 - event.currentTarget.scrollTop
     if (Math.abs(viewRef.current.y - nextY) < 0.5) return
@@ -328,19 +649,10 @@ function Viewer() {
     scheduleViewUpdate()
   }
 
-  const handleDiagramLoad = (event: React.SyntheticEvent<HTMLImageElement>) => {
-    const image = event.currentTarget
-    diagramSizeRef.current = {
-      width: image.naturalWidth,
-      height: image.naturalHeight,
-    }
-    scheduleViewUpdate()
-  }
-
   const handlePreviewPointerDown = (
     event: React.PointerEvent<HTMLDivElement>,
   ) => {
-    if (!svgUrl || (event.button !== 0 && event.button !== 1)) return
+    if (!hasRenderedSvg || (event.button !== 0 && event.button !== 1)) return
     const preview = event.currentTarget
     const previewBounds = preview.getBoundingClientRect()
     const scrollbarWidth = preview.offsetWidth - preview.clientWidth
@@ -353,6 +665,8 @@ function Viewer() {
     }
 
     event.preventDefault()
+    setHighlightedSourceRange(null)
+    didDragPreviewRef.current = false
     panStart.current = {
       pointerId: event.pointerId,
       x: event.clientX,
@@ -368,11 +682,21 @@ function Viewer() {
   const handlePreviewPointerMove = (
     event: React.PointerEvent<HTMLDivElement>,
   ) => {
-    if (!isPanningRef.current || event.pointerId !== panStart.current.pointerId) return
+    if (!isPanningRef.current || event.pointerId !== panStart.current.pointerId) {
+      updateSourceHighlightFromPreview(event)
+      return
+    }
+
+    const deltaX = event.clientX - panStart.current.x
+    const deltaY = event.clientY - panStart.current.y
+    if (Math.hypot(deltaX, deltaY) > 3) {
+      didDragPreviewRef.current = true
+    }
+
     viewRef.current = {
       ...viewRef.current,
-      x: panStart.current.panX + (event.clientX - panStart.current.x),
-      y: panStart.current.panY + (event.clientY - panStart.current.y),
+      x: panStart.current.panX + deltaX,
+      y: panStart.current.panY + deltaY,
     }
     scheduleViewUpdate()
   }
@@ -385,6 +709,12 @@ function Viewer() {
     isPanningRef.current = false
     setIsPanning(false)
     scheduleViewUpdate()
+  }
+
+  const handlePreviewPointerLeave = () => {
+    if (!isPanningRef.current) {
+      setHighlightedSourceRange(null)
+    }
   }
 
   return (
@@ -419,10 +749,30 @@ function Viewer() {
             </div>
           </div>
           <div className="viewer-editor-wrap">
-            <textarea aria-label="PlantUML source" value={source} onChange={(event) => setSource(event.target.value)} onKeyDown={handleEditorKeyDown} spellCheck={false} />
+            <div className="viewer-source-highlight-layer" aria-hidden="true">
+              {highlightedLines.map((lineNumber) => (
+                <span
+                  key={lineNumber}
+                  className="viewer-source-highlight-line"
+                  style={{ transform: `translateY(calc(${lineNumber} * var(--viewer-editor-line-height) - ${editorScrollTop}px))` }}
+                />
+              ))}
+            </div>
+            <textarea
+              ref={editorRef}
+              aria-label="PlantUML source"
+              value={source}
+              onChange={(event) => {
+                setHighlightedSourceRange(null)
+                setSource(event.target.value)
+              }}
+              onKeyDown={handleEditorKeyDown}
+              onScroll={(event) => setEditorScrollTop(event.currentTarget.scrollTop)}
+              spellCheck={false}
+            />
           </div>
           <div className="viewer-panel-footer">
-            <span>{source.split('\n').length} lines</span>
+            <span>{sourceLineCount} lines</span>
             <span><kbd>Ctrl</kbd> + <kbd>Enter</kbd> to render</span>
           </div>
         </div>}
@@ -442,31 +792,28 @@ function Viewer() {
           <div
             ref={previewRef}
             className={`viewer-preview-canvas${isPanning ? ' viewer-preview-panning' : ''}`}
-            onPointerDown={handlePreviewPointerDown}
-            onPointerMove={handlePreviewPointerMove}
-            onPointerUp={stopPreviewPan}
-            onPointerCancel={stopPreviewPan}
+            onWheelCapture={handlePreviewWheel}
+            onPointerDownCapture={handlePreviewPointerDown}
+            onPointerMoveCapture={handlePreviewPointerMove}
+            onPointerUpCapture={stopPreviewPan}
+            onPointerCancelCapture={stopPreviewPan}
+            onPointerLeave={handlePreviewPointerLeave}
+            onClick={handlePreviewClick}
             onScroll={handlePreviewScroll}
             onContextMenu={(event) => event.preventDefault()}
           >
-            {svgUrl ? (
+            {hasRenderedSvg ? (
               <>
                 <div ref={previewSpacerRef} className="viewer-preview-scroll-spacer" aria-hidden="true" />
                 <div
                   ref={setPreviewPositionNode}
                   className="viewer-preview-position"
                 >
-                <div
-                  ref={setPreviewStageNode}
-                  className="viewer-preview-stage"
-                >
-                  <img
-                    src={svgUrl}
-                    alt="Rendered PlantUML diagram"
-                    draggable={false}
-                    onLoad={handleDiagramLoad}
+                  <div
+                    ref={setPreviewStageNode}
+                    className="viewer-preview-stage"
+                    dangerouslySetInnerHTML={{ __html: sanitizedSvg }}
                   />
-                </div>
                 </div>
               </>
             ) : (
@@ -481,7 +828,7 @@ function Viewer() {
           <div className={`viewer-status-bar viewer-status-${status}`}>
             <span className="viewer-status-dot" aria-hidden="true" />
             <span>{message}</span>
-            <span className="viewer-navigation-hint">Drag to pan · Mouse wheel to zoom · Scrollbar moves vertically</span>
+            <span className="viewer-navigation-hint">Hover highlights source · Click scrolls source · Drag to pan</span>
           </div>
         </div>
       </section>
