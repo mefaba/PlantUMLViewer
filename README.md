@@ -13,6 +13,8 @@ pnpm dev
 
 Paste PlantUML into the editor and the preview updates automatically. Use `Ctrl+Enter` (or `Cmd+Enter`) to render immediately. The generated diagram can be downloaded as SVG or PNG.
 
+Inside the preview, use the mouse wheel for smooth cursor-centered zoom from 10% to 2000%, and drag the diagram to pan. The source panel can be collapsed to give the preview the full workspace width.
+
 For a production build and local preview:
 
 ```sh
