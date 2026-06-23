@@ -298,9 +298,13 @@ body {
   box-sizing: border-box;
   border: 0;
   outline: 0;
+  overflow: auto;
   color: #d7dee7;
   background: transparent;
   font: 14px/var(--viewer-editor-line-height) var(--viewer-mono);
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
   tab-size: 2;
   caret-color: var(--viewer-accent);
 }

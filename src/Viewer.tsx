@@ -900,6 +900,7 @@ function Viewer() {
               }}
               onKeyDown={handleEditorKeyDown}
               onScroll={(event) => setEditorScrollTop(event.currentTarget.scrollTop)}
+              wrap="off"
               spellCheck={false}
             />
           </div>
