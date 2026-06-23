@@ -19,9 +19,18 @@ type RenderState = 'idle' | 'rendering' | 'ready' | 'error'
 
 const minZoom = 10
 const maxZoom = 2000
+const sourceStorageKey = 'plantuml-viewer.source.v1'
+
+function loadSavedSource() {
+  try {
+    return window.localStorage.getItem(sourceStorageKey) ?? starterDiagram
+  } catch {
+    return starterDiagram
+  }
+}
 
 function Viewer() {
-  const [source, setSource] = useState(starterDiagram)
+  const [source, setSource] = useState(loadSavedSource)
   const [svgUrl, setSvgUrl] = useState('')
   const [svgText, setSvgText] = useState('')
   const [status, setStatus] = useState<RenderState>('idle')
@@ -135,6 +144,14 @@ function Viewer() {
     const timer = window.setTimeout(() => renderDiagram(source), 450)
     return () => window.clearTimeout(timer)
   }, [renderDiagram, source])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(sourceStorageKey, source)
+    } catch {
+      // Keep the editor usable when browser storage is unavailable or full.
+    }
+  }, [source])
 
   useEffect(
     () => () => {
