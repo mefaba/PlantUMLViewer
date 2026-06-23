@@ -346,7 +346,7 @@ function Viewer() {
           <div className="viewer-panel-header">
             <div><span className="viewer-eyebrow">Source</span><h2>PlantUML</h2></div>
             <div className="viewer-header-actions">
-              <button className="viewer-icon-button" type="button" onClick={() => setIsSourceCollapsed(true)} aria-label="Collapse source panel" title="Collapse source panel">‹</button>
+              <button className="viewer-icon-button" type="button" onClick={() => setIsSourceCollapsed(true)} aria-label="Collapse source panel" title="Collapse source panel"><span className="viewer-chevron-left" aria-hidden="true" /></button>
               <button className="viewer-button viewer-button-primary" type="button" onClick={() => void renderDiagram(source)} disabled={status === 'rendering'}>
                 {status === 'rendering' ? 'Rendering…' : 'Render'}
               </button>

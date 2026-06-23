@@ -164,6 +164,9 @@ body {
 }
 
 .viewer-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 36px;
   height: 36px;
   padding: 0;
@@ -171,6 +174,16 @@ body {
   border-radius: 9px;
   background: var(--viewer-raised);
   font-size: 24px;
+  line-height: 1;
+  text-align: center;
+}
+
+.viewer-chevron-left {
+  width: 8px;
+  height: 8px;
+  border-bottom: 2px solid currentColor;
+  border-left: 2px solid currentColor;
+  transform: translateX(1px) rotate(45deg);
 }
 
 .viewer-button {
@@ -288,10 +301,7 @@ body {
   flex: 1;
   overflow: hidden;
   position: relative;
-  background-color: #e7e8e4;
-  background-image: linear-gradient(45deg, #dcddd9 25%, transparent 25%), linear-gradient(-45deg, #dcddd9 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #dcddd9 75%), linear-gradient(-45deg, transparent 75%, #dcddd9 75%);
-  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
-  background-size: 16px 16px;
+  background: #ffffff;
   cursor: grab;
   touch-action: none;
   user-select: none;
