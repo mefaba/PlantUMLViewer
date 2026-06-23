@@ -32,6 +32,12 @@ type DiagramSize = {
   height: number
 }
 
+type PreviewPointerEvent = {
+  clientX: number
+  clientY: number
+  target: EventTarget | null
+}
+
 const minZoom = 10
 const maxZoom = 2000
 const sourceStorageKey = 'plantuml-viewer.source.v1'
@@ -271,7 +277,7 @@ function scrollSourceRangeIntoView(editor: HTMLTextAreaElement, range: SourceRan
 }
 
 function resolvePreviewSourceRange(
-  event: React.PointerEvent<HTMLDivElement>,
+  event: PreviewPointerEvent,
   stage: HTMLDivElement | null,
   sourceIndex: SourceIndexEntry[],
 ) {
@@ -354,6 +360,7 @@ function Viewer() {
   const viewRef = useRef({ zoom: 100, x: 0, y: 0 })
   const diagramSizeRef = useRef({ width: 0, height: 0 })
   const isPanningRef = useRef(false)
+  const syncedPreviewScrollTopRef = useRef<number | null>(null)
   const panStart = useRef({
     pointerId: 0,
     x: 0,
@@ -392,6 +399,7 @@ function Viewer() {
           )
 
           if (Math.abs(preview.scrollTop - nextScrollTop) > 0.5) {
+            syncedPreviewScrollTopRef.current = nextScrollTop
             preview.scrollTop = nextScrollTop
           }
         }
@@ -574,7 +582,7 @@ function Viewer() {
     scheduleViewUpdate()
   }
 
-  const updateSourceHighlightFromPreview = (event: React.PointerEvent<HTMLDivElement>) => {
+  const updateSourceHighlightFromPreview = useCallback((event: PreviewPointerEvent) => {
     if (!hasRenderedSvg || isSourceCollapsed) return
 
     const nextRange = resolvePreviewSourceRange(event, previewStageRef.current, sourceIndex)
@@ -582,7 +590,7 @@ function Viewer() {
       if (rangesEqual(currentRange, nextRange)) return currentRange
       return nextRange
     })
-  }
+  }, [hasRenderedSvg, isSourceCollapsed, sourceIndex])
 
   const handlePreviewClick = (event: React.PointerEvent<HTMLDivElement>) => {
     if (
@@ -600,19 +608,21 @@ function Viewer() {
     }
   }
 
-  const handlePreviewWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+  const handlePreviewWheel = useCallback((event: WheelEvent) => {
     if (!hasRenderedSvg) return
     event.preventDefault()
 
-    const preview = event.currentTarget
+    const preview = previewRef.current
+    if (!preview) return
+
     const rect = preview.getBoundingClientRect()
     const pointerX = event.clientX - rect.left
     const pointerY = event.clientY - rect.top
     const delta =
       event.deltaY *
-      (event.deltaMode === 1
+      (event.deltaMode === WheelEvent.DOM_DELTA_LINE
         ? 16
-        : event.deltaMode === 2
+        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
           ? preview.clientHeight
           : 1)
     const currentView = viewRef.current
@@ -634,10 +644,19 @@ function Viewer() {
         (centeredPointerY - currentView.y) * ratio,
     }
     scheduleViewUpdate()
-  }
+  }, [hasRenderedSvg, scheduleViewUpdate])
 
   const handlePreviewScroll = (event: React.UIEvent<HTMLDivElement>) => {
     if (!hasRenderedSvg) return
+    if (
+      syncedPreviewScrollTopRef.current !== null &&
+      Math.abs(event.currentTarget.scrollTop - syncedPreviewScrollTopRef.current) < 1
+    ) {
+      syncedPreviewScrollTopRef.current = null
+      return
+    }
+    syncedPreviewScrollTopRef.current = null
+
     const scrollRange = getVerticalScrollRange()
     const nextY = scrollRange / 2 - event.currentTarget.scrollTop
     if (Math.abs(viewRef.current.y - nextY) < 0.5) return
@@ -649,11 +668,11 @@ function Viewer() {
     scheduleViewUpdate()
   }
 
-  const handlePreviewPointerDown = (
-    event: React.PointerEvent<HTMLDivElement>,
-  ) => {
+  const handlePreviewPointerDown = useCallback((event: PointerEvent) => {
     if (!hasRenderedSvg || (event.button !== 0 && event.button !== 1)) return
-    const preview = event.currentTarget
+    const preview = previewRef.current
+    if (!preview) return
+
     const previewBounds = preview.getBoundingClientRect()
     const scrollbarWidth = preview.offsetWidth - preview.clientWidth
 
@@ -677,11 +696,9 @@ function Viewer() {
     preview.setPointerCapture(event.pointerId)
     isPanningRef.current = true
     setIsPanning(true)
-  }
+  }, [hasRenderedSvg])
 
-  const handlePreviewPointerMove = (
-    event: React.PointerEvent<HTMLDivElement>,
-  ) => {
+  const handlePreviewPointerMove = useCallback((event: PointerEvent) => {
     if (!isPanningRef.current || event.pointerId !== panStart.current.pointerId) {
       updateSourceHighlightFromPreview(event)
       return
@@ -699,23 +716,48 @@ function Viewer() {
       y: panStart.current.panY + deltaY,
     }
     scheduleViewUpdate()
-  }
+  }, [scheduleViewUpdate, updateSourceHighlightFromPreview])
 
-  const stopPreviewPan = (event: React.PointerEvent<HTMLDivElement>) => {
+  const stopPreviewPan = useCallback((event: PointerEvent) => {
     if (event.pointerId !== panStart.current.pointerId) return
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId)
+    const preview = previewRef.current
+    if (preview?.hasPointerCapture(event.pointerId)) {
+      preview.releasePointerCapture(event.pointerId)
     }
     isPanningRef.current = false
     setIsPanning(false)
     scheduleViewUpdate()
-  }
+  }, [scheduleViewUpdate])
 
-  const handlePreviewPointerLeave = () => {
+  const handlePreviewPointerLeave = useCallback(() => {
     if (!isPanningRef.current) {
       setHighlightedSourceRange(null)
     }
-  }
+  }, [])
+
+  useEffect(() => {
+    const preview = previewRef.current
+    if (!preview) return
+
+    preview.addEventListener('wheel', handlePreviewWheel, {
+      capture: true,
+      passive: false,
+    })
+    preview.addEventListener('pointerdown', handlePreviewPointerDown, { capture: true })
+    preview.addEventListener('pointermove', handlePreviewPointerMove, { capture: true })
+    preview.addEventListener('pointerup', stopPreviewPan, { capture: true })
+    preview.addEventListener('pointercancel', stopPreviewPan, { capture: true })
+    preview.addEventListener('pointerleave', handlePreviewPointerLeave)
+
+    return () => {
+      preview.removeEventListener('wheel', handlePreviewWheel, { capture: true })
+      preview.removeEventListener('pointerdown', handlePreviewPointerDown, { capture: true })
+      preview.removeEventListener('pointermove', handlePreviewPointerMove, { capture: true })
+      preview.removeEventListener('pointerup', stopPreviewPan, { capture: true })
+      preview.removeEventListener('pointercancel', stopPreviewPan, { capture: true })
+      preview.removeEventListener('pointerleave', handlePreviewPointerLeave)
+    }
+  }, [handlePreviewPointerDown, handlePreviewPointerLeave, handlePreviewPointerMove, handlePreviewWheel, stopPreviewPan])
 
   return (
     <main className="viewer-shell">
@@ -792,12 +834,6 @@ function Viewer() {
           <div
             ref={previewRef}
             className={`viewer-preview-canvas${isPanning ? ' viewer-preview-panning' : ''}`}
-            onWheelCapture={handlePreviewWheel}
-            onPointerDownCapture={handlePreviewPointerDown}
-            onPointerMoveCapture={handlePreviewPointerMove}
-            onPointerUpCapture={stopPreviewPan}
-            onPointerCancelCapture={stopPreviewPan}
-            onPointerLeave={handlePreviewPointerLeave}
             onClick={handlePreviewClick}
             onScroll={handlePreviewScroll}
             onContextMenu={(event) => event.preventDefault()}
