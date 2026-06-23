@@ -23,3 +23,11 @@ For a production build and local preview:
 pnpm build
 pnpm preview
 ```
+
+## Run with Docker
+
+```sh
+docker compose up --build
+```
+
+Open <http://localhost:4173>. The image includes Java and Graphviz for local PlantUML rendering.
