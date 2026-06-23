@@ -41,6 +41,9 @@ type PreviewPointerEvent = {
 const minZoom = 10
 const maxZoom = 2000
 const sourceStorageKey = 'plantuml-viewer.source.v1'
+const sourceWidthStorageKey = 'plantuml-viewer.sourceWidth.v1'
+const minSourcePanelWidth = 300
+const minPreviewPanelWidth = 420
 
 function normalizeLabel(value: string) {
   return value
@@ -327,6 +330,23 @@ function loadSavedSource() {
   }
 }
 
+function loadSavedSourcePanelWidth() {
+  try {
+    const savedWidth = Number(window.localStorage.getItem(sourceWidthStorageKey))
+    return Number.isFinite(savedWidth) && savedWidth > 0 ? savedWidth : null
+  } catch {
+    return null
+  }
+}
+
+function clampSourcePanelWidth(width: number, workspaceWidth?: number) {
+  const maxWidth = workspaceWidth
+    ? Math.max(minSourcePanelWidth, workspaceWidth - minPreviewPanelWidth - 12)
+    : Number.POSITIVE_INFINITY
+
+  return Math.min(maxWidth, Math.max(minSourcePanelWidth, width))
+}
+
 function Viewer() {
   const [source, setSource] = useState(loadSavedSource)
   const [svgText, setSvgText] = useState('')
@@ -336,8 +356,11 @@ function Viewer() {
   const [isDownloadingPng, setIsDownloadingPng] = useState(false)
   const [isSourceCollapsed, setIsSourceCollapsed] = useState(false)
   const [isPanning, setIsPanning] = useState(false)
+  const [isResizingSource, setIsResizingSource] = useState(false)
+  const [sourcePanelWidth, setSourcePanelWidth] = useState<number | null>(loadSavedSourcePanelWidth)
   const [highlightedSourceRange, setHighlightedSourceRange] = useState<SourceRange | null>(null)
   const [editorScrollTop, setEditorScrollTop] = useState(0)
+  const [previewNode, setPreviewNode] = useState<HTMLDivElement | null>(null)
   const sanitizedSvg = useMemo(() => sanitizeSvg(svgText), [svgText])
   const svgSize = useMemo(() => getSvgSize(sanitizedSvg), [sanitizedSvg])
   const sourceIndex = useMemo(() => buildSourceIndex(source), [source])
@@ -352,6 +375,8 @@ function Viewer() {
   const hasRenderedSvg = Boolean(sanitizedSvg)
   const requestId = useRef(0)
   const editorRef = useRef<HTMLTextAreaElement>(null)
+  const workspaceRef = useRef<HTMLElement>(null)
+  const sourcePanelRef = useRef<HTMLDivElement>(null)
   const previewRef = useRef<HTMLDivElement>(null)
   const previewSpacerRef = useRef<HTMLDivElement>(null)
   const previewPositionRef = useRef<HTMLDivElement>(null)
@@ -370,6 +395,11 @@ function Viewer() {
     y: 0,
     panX: 0,
     panY: 0,
+  })
+  const sourceResizeStart = useRef({
+    pointerId: 0,
+    x: 0,
+    width: 0,
   })
   const didDragPreviewRef = useRef(false)
 
@@ -442,6 +472,11 @@ function Viewer() {
     }
   }, [])
 
+  const setPreviewCanvasNode = useCallback((node: HTMLDivElement | null) => {
+    previewRef.current = node
+    setPreviewNode(node)
+  }, [])
+
   const renderDiagram = useCallback(async (diagramSource: string) => {
     const currentRequest = ++requestId.current
 
@@ -500,6 +535,16 @@ function Viewer() {
       // Keep the editor usable when browser storage is unavailable or full.
     }
   }, [source])
+
+  useEffect(() => {
+    if (sourcePanelWidth === null) return
+
+    try {
+      window.localStorage.setItem(sourceWidthStorageKey, String(Math.round(sourcePanelWidth)))
+    } catch {
+      // Keep resizing usable when browser storage is unavailable or full.
+    }
+  }, [sourcePanelWidth])
 
   useEffect(
     () => () => {
@@ -618,7 +663,6 @@ function Viewer() {
   }
 
   const handlePreviewWheel = useCallback((event: WheelEvent) => {
-    if (!hasRenderedSvgRef.current) return
     event.preventDefault()
 
     const preview = previewRef.current
@@ -678,7 +722,7 @@ function Viewer() {
   }
 
   const handlePreviewPointerDown = useCallback((event: PointerEvent) => {
-    if (!hasRenderedSvgRef.current || (event.button !== 0 && event.button !== 1)) return
+    if (event.button !== 0 && event.button !== 1) return
     const preview = previewRef.current
     if (!preview) return
 
@@ -744,8 +788,41 @@ function Viewer() {
     }
   }, [])
 
+  const handleSourceResizePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    const workspaceWidth = workspaceRef.current?.clientWidth
+    const currentSourceWidth =
+      sourcePanelWidth ??
+      sourcePanelRef.current?.getBoundingClientRect().width ??
+      (workspaceWidth ? workspaceWidth * 0.4 : minSourcePanelWidth)
+
+    sourceResizeStart.current = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      width: clampSourcePanelWidth(currentSourceWidth, workspaceWidth),
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setIsResizingSource(true)
+  }
+
+  const handleSourceResizePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!isResizingSource || event.pointerId !== sourceResizeStart.current.pointerId) return
+    const workspaceWidth = workspaceRef.current?.clientWidth
+    const nextWidth = sourceResizeStart.current.width + event.clientX - sourceResizeStart.current.x
+    setSourcePanelWidth(clampSourcePanelWidth(nextWidth, workspaceWidth))
+  }
+
+  const stopSourceResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.pointerId !== sourceResizeStart.current.pointerId) return
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    setIsResizingSource(false)
+  }
+
   useEffect(() => {
-    const preview = previewRef.current
+    const preview = previewNode
     if (!preview) return
 
     preview.addEventListener('wheel', handlePreviewWheel, {
@@ -766,7 +843,7 @@ function Viewer() {
       preview.removeEventListener('pointercancel', stopPreviewPan, { capture: true })
       preview.removeEventListener('pointerleave', handlePreviewPointerLeave)
     }
-  }, [handlePreviewPointerDown, handlePreviewPointerLeave, handlePreviewPointerMove, handlePreviewWheel, stopPreviewPan])
+  }, [handlePreviewPointerDown, handlePreviewPointerLeave, handlePreviewPointerMove, handlePreviewWheel, previewNode, stopPreviewPan])
 
   return (
     <main className="viewer-shell">
@@ -788,8 +865,12 @@ function Viewer() {
         </div>
       </header>
 
-      <section className={`viewer-workspace${isSourceCollapsed ? ' viewer-workspace-collapsed' : ''}`}>
-        {!isSourceCollapsed && <div key="source" className="viewer-panel viewer-source-panel">
+      <section
+        ref={workspaceRef}
+        className={`viewer-workspace${isSourceCollapsed ? ' viewer-workspace-collapsed' : ''}${isResizingSource ? ' viewer-workspace-resizing' : ''}`}
+        style={isSourceCollapsed || sourcePanelWidth === null ? undefined : { '--viewer-source-width': `${sourcePanelWidth}px` } as React.CSSProperties}
+      >
+        {!isSourceCollapsed && <div ref={sourcePanelRef} key="source" className="viewer-panel viewer-source-panel">
           <div className="viewer-panel-header">
             <div><span className="viewer-eyebrow">Source</span><h2>PlantUML</h2></div>
             <div className="viewer-header-actions">
@@ -828,6 +909,20 @@ function Viewer() {
           </div>
         </div>}
 
+        {!isSourceCollapsed && <div
+          className="viewer-source-resizer"
+          role="separator"
+          aria-label="Resize source panel"
+          aria-orientation="vertical"
+          aria-valuemin={minSourcePanelWidth}
+          aria-valuenow={sourcePanelWidth === null ? undefined : Math.round(sourcePanelWidth)}
+          title="Drag to resize source panel"
+          onPointerDown={handleSourceResizePointerDown}
+          onPointerMove={handleSourceResizePointerMove}
+          onPointerUp={stopSourceResize}
+          onPointerCancel={stopSourceResize}
+        />}
+
         <div key="preview" className="viewer-panel viewer-preview-panel">
           <div className="viewer-panel-header">
             <div><span className="viewer-eyebrow">Output</span><h2>Preview</h2></div>
@@ -841,7 +936,7 @@ function Viewer() {
             </div>
           </div>
           <div
-            ref={previewRef}
+            ref={setPreviewCanvasNode}
             className={`viewer-preview-canvas${isPanning ? ' viewer-preview-panning' : ''}`}
             onClick={handlePreviewClick}
             onScroll={handlePreviewScroll}
