@@ -361,6 +361,9 @@ function Viewer() {
   const diagramSizeRef = useRef({ width: 0, height: 0 })
   const isPanningRef = useRef(false)
   const syncedPreviewScrollTopRef = useRef<number | null>(null)
+  const hasRenderedSvgRef = useRef(false)
+  const isSourceCollapsedRef = useRef(false)
+  const sourceIndexRef = useRef<SourceIndexEntry[]>([])
   const panStart = useRef({
     pointerId: 0,
     x: 0,
@@ -369,6 +372,12 @@ function Viewer() {
     panY: 0,
   })
   const didDragPreviewRef = useRef(false)
+
+  useEffect(() => {
+    hasRenderedSvgRef.current = hasRenderedSvg
+    isSourceCollapsedRef.current = isSourceCollapsed
+    sourceIndexRef.current = sourceIndex
+  }, [hasRenderedSvg, isSourceCollapsed, sourceIndex])
 
   const getVerticalScrollRange = useCallback((zoomLevel = viewRef.current.zoom) => {
     const preview = previewRef.current
@@ -583,25 +592,25 @@ function Viewer() {
   }
 
   const updateSourceHighlightFromPreview = useCallback((event: PreviewPointerEvent) => {
-    if (!hasRenderedSvg || isSourceCollapsed) return
+    if (!hasRenderedSvgRef.current || isSourceCollapsedRef.current) return
 
-    const nextRange = resolvePreviewSourceRange(event, previewStageRef.current, sourceIndex)
+    const nextRange = resolvePreviewSourceRange(event, previewStageRef.current, sourceIndexRef.current)
     setHighlightedSourceRange((currentRange) => {
       if (rangesEqual(currentRange, nextRange)) return currentRange
       return nextRange
     })
-  }, [hasRenderedSvg, isSourceCollapsed, sourceIndex])
+  }, [])
 
   const handlePreviewClick = (event: React.PointerEvent<HTMLDivElement>) => {
     if (
-      !hasRenderedSvg ||
-      isSourceCollapsed ||
+      !hasRenderedSvgRef.current ||
+      isSourceCollapsedRef.current ||
       isPanningRef.current ||
       didDragPreviewRef.current ||
       !editorRef.current
     ) return
 
-    const nextRange = resolvePreviewSourceRange(event, previewStageRef.current, sourceIndex)
+    const nextRange = resolvePreviewSourceRange(event, previewStageRef.current, sourceIndexRef.current)
     if (nextRange) {
       setHighlightedSourceRange(nextRange)
       scrollSourceRangeIntoView(editorRef.current, nextRange)
@@ -609,7 +618,7 @@ function Viewer() {
   }
 
   const handlePreviewWheel = useCallback((event: WheelEvent) => {
-    if (!hasRenderedSvg) return
+    if (!hasRenderedSvgRef.current) return
     event.preventDefault()
 
     const preview = previewRef.current
@@ -644,10 +653,10 @@ function Viewer() {
         (centeredPointerY - currentView.y) * ratio,
     }
     scheduleViewUpdate()
-  }, [hasRenderedSvg, scheduleViewUpdate])
+  }, [scheduleViewUpdate])
 
   const handlePreviewScroll = (event: React.UIEvent<HTMLDivElement>) => {
-    if (!hasRenderedSvg) return
+    if (!hasRenderedSvgRef.current) return
     if (
       syncedPreviewScrollTopRef.current !== null &&
       Math.abs(event.currentTarget.scrollTop - syncedPreviewScrollTopRef.current) < 1
@@ -669,7 +678,7 @@ function Viewer() {
   }
 
   const handlePreviewPointerDown = useCallback((event: PointerEvent) => {
-    if (!hasRenderedSvg || (event.button !== 0 && event.button !== 1)) return
+    if (!hasRenderedSvgRef.current || (event.button !== 0 && event.button !== 1)) return
     const preview = previewRef.current
     if (!preview) return
 
@@ -696,7 +705,7 @@ function Viewer() {
     preview.setPointerCapture(event.pointerId)
     isPanningRef.current = true
     setIsPanning(true)
-  }, [hasRenderedSvg])
+  }, [])
 
   const handlePreviewPointerMove = useCallback((event: PointerEvent) => {
     if (!isPanningRef.current || event.pointerId !== panStart.current.pointerId) {
