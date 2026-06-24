@@ -30,4 +30,4 @@ pnpm preview
 docker compose up --build
 ```
 
-Open <http://localhost:4173>. The image includes Java and Graphviz for local PlantUML rendering.
+Open <http://localhost:4173>. The image includes Java, Graphviz, and Noto CJK fonts for local PlantUML rendering, including PNG export with Japanese/CJK text.

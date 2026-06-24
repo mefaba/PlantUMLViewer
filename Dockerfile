@@ -3,8 +3,11 @@ FROM node:24-bookworm-slim
 WORKDIR /app
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends openjdk-17-jre-headless graphviz \
+  && apt-get install -y --no-install-recommends openjdk-17-jre-headless graphviz fonts-noto-cjk \
   && rm -rf /var/lib/apt/lists/*
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
 
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH

@@ -31,6 +31,8 @@ function renderPlantUml(
       'java',
       [
         '-Djava.awt.headless=true',
+        '-Dfile.encoding=UTF-8',
+        '-Dsun.jnu.encoding=UTF-8',
         '-jar',
         plantUmlJar,
         '-pipe',
