@@ -389,7 +389,6 @@ function Viewer() {
   const hasRenderedSvgRef = useRef(false)
   const isSourceCollapsedRef = useRef(false)
   const sourceIndexRef = useRef<SourceIndexEntry[]>([])
-  const lastNativeWheelEventRef = useRef<WheelEvent | null>(null)
   const panStart = useRef({
     pointerId: 0,
     x: 0,
@@ -664,7 +663,6 @@ function Viewer() {
   }
 
   const handlePreviewWheel = useCallback((event: WheelEvent) => {
-    lastNativeWheelEventRef.current = event
     event.preventDefault()
 
     const preview = previewRef.current
@@ -701,10 +699,6 @@ function Viewer() {
     scheduleViewUpdate()
   }, [scheduleViewUpdate])
 
-  const handlePreviewWheelFallback = (event: React.WheelEvent<HTMLDivElement>) => {
-    if (event.nativeEvent === lastNativeWheelEventRef.current) return
-    handlePreviewWheel(event.nativeEvent)
-  }
 
   const handlePreviewScroll = (event: React.UIEvent<HTMLDivElement>) => {
     if (!hasRenderedSvgRef.current) return
@@ -758,10 +752,6 @@ function Viewer() {
     setIsPanning(true)
   }, [])
 
-  const handlePreviewPointerDownFallback = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (event.defaultPrevented || event.nativeEvent.defaultPrevented) return
-    handlePreviewPointerDown(event.nativeEvent)
-  }
 
   const handlePreviewPointerMove = useCallback((event: PointerEvent) => {
     if (!isPanningRef.current || event.pointerId !== panStart.current.pointerId) {
@@ -783,9 +773,6 @@ function Viewer() {
     scheduleViewUpdate()
   }, [scheduleViewUpdate, updateSourceHighlightFromPreview])
 
-  const handlePreviewPointerMoveFallback = (event: React.PointerEvent<HTMLDivElement>) => {
-    handlePreviewPointerMove(event.nativeEvent)
-  }
 
   const stopPreviewPan = useCallback((event: PointerEvent) => {
     if (event.pointerId !== panStart.current.pointerId) return
@@ -798,9 +785,6 @@ function Viewer() {
     scheduleViewUpdate()
   }, [scheduleViewUpdate])
 
-  const stopPreviewPanFallback = (event: React.PointerEvent<HTMLDivElement>) => {
-    stopPreviewPan(event.nativeEvent)
-  }
 
   const handlePreviewPointerLeave = useCallback(() => {
     if (!isPanningRef.current) {
@@ -959,11 +943,6 @@ function Viewer() {
           <div
             ref={setPreviewCanvasNode}
             className={`viewer-preview-canvas${isPanning ? ' viewer-preview-panning' : ''}`}
-            onWheelCapture={handlePreviewWheelFallback}
-            onPointerDownCapture={handlePreviewPointerDownFallback}
-            onPointerMoveCapture={handlePreviewPointerMoveFallback}
-            onPointerUpCapture={stopPreviewPanFallback}
-            onPointerCancelCapture={stopPreviewPanFallback}
             onClick={handlePreviewClick}
             onScroll={handlePreviewScroll}
             onContextMenu={(event) => event.preventDefault()}
