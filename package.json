@@ -1,8 +1,14 @@
 {
   "name": "plantuml-viewer",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "A local PlantUML editor with automatic SVG and PNG preview rendering.",
+  "license": "MIT",
   "type": "module",
+  "packageManager": "pnpm@11.1.1",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",

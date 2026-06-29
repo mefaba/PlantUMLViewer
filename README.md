@@ -2,9 +2,22 @@
 
 A local PlantUML editor with automatic SVG preview. Diagram source is rendered by the bundled `plantuml-mit-1.2026.6.jar`; it is not sent to an external rendering service.
 
-## Run locally
+## Features
 
-Java 17 or newer and pnpm are required.
+- Local PlantUML rendering through the bundled PlantUML CLI JAR.
+- Automatic SVG preview while editing.
+- SVG and PNG downloads.
+- Persistent browser-local source storage.
+- Source panel resizing/collapse, diagram pan, and cursor-centered zoom.
+- Preview-to-source navigation for many rendered labels.
+
+## Requirements
+
+- Node.js 24 or newer
+- pnpm 11 or newer
+- Java 17 or newer
+
+## Run locally
 
 ```sh
 pnpm install
@@ -29,3 +42,11 @@ pnpm preview
 ```sh
 docker compose up --build
 ```
+
+The Docker image installs Java, Graphviz, and CJK fonts for PlantUML rendering.
+
+## Public Release Notes
+
+- `plantuml-mit-1.2026.6.jar` is intentionally checked in so the app can render locally without calling a public PlantUML server.
+- The repository is marked `"private": true` in `package.json` to prevent accidental npm publication. This does not prevent publishing the code on GitHub.
+- Released under the MIT License.
