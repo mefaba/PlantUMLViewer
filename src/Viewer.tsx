@@ -385,6 +385,7 @@ function Viewer() {
   const diagramSizeRef = useRef({ width: 0, height: 0 })
   const isPanningRef = useRef(false)
   const syncedPreviewScrollTopRef = useRef<number | null>(null)
+  const preservedPreviewScrollTopRef = useRef<number | null>(null)
   const hasRenderedSvgRef = useRef(false)
   const isSourceCollapsedRef = useRef(false)
   const sourceIndexRef = useRef<SourceIndexEntry[]>([])
@@ -430,7 +431,18 @@ function Viewer() {
         const scrollRange = getVerticalScrollRange(view.zoom)
         previewSpacerRef.current.style.height = `${preview.clientHeight + scrollRange}px`
 
-        if (!isPanningRef.current) {
+        if (preservedPreviewScrollTopRef.current !== null) {
+          const nextScrollTop = Math.min(
+            scrollRange,
+            Math.max(0, preservedPreviewScrollTopRef.current),
+          )
+          preservedPreviewScrollTopRef.current = null
+
+          if (Math.abs(preview.scrollTop - nextScrollTop) > 0.5) {
+            syncedPreviewScrollTopRef.current = nextScrollTop
+            preview.scrollTop = nextScrollTop
+          }
+        } else if (!isPanningRef.current) {
           const nextScrollTop = Math.min(
             scrollRange,
             Math.max(0, scrollRange / 2 - view.y),
@@ -661,8 +673,11 @@ function Viewer() {
     }
   }
 
-  const handlePreviewWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+  const handlePreviewWheel = useCallback((event: WheelEvent) => {
+    if (!event.ctrlKey) return
+
     event.preventDefault()
+    event.stopPropagation()
 
     const preview = previewRef.current
     if (!preview) return
@@ -670,6 +685,7 @@ function Viewer() {
     const rect = preview.getBoundingClientRect()
     const pointerX = event.clientX - rect.left
     const pointerY = event.clientY - rect.top
+    const scrollTop = preview.scrollTop
     const delta =
       event.deltaY *
       (event.deltaMode === 1
@@ -685,6 +701,7 @@ function Viewer() {
     const ratio = nextZoom / currentView.zoom
     const centeredPointerX = pointerX - preview.clientWidth / 2
     const centeredPointerY = pointerY - preview.clientHeight / 2
+    const currentOffsetY = currentView.y + scrollTop
 
     viewRef.current = {
       zoom: nextZoom,
@@ -693,10 +710,20 @@ function Viewer() {
         (centeredPointerX - currentView.x) * ratio,
       y:
         centeredPointerY -
-        (centeredPointerY - currentView.y) * ratio,
+        (centeredPointerY - currentOffsetY) * ratio -
+        scrollTop,
     }
+    preservedPreviewScrollTopRef.current = scrollTop
     scheduleViewUpdate()
-  }
+  }, [scheduleViewUpdate])
+
+  useEffect(() => {
+    const preview = previewRef.current
+    if (!preview) return
+
+    preview.addEventListener('wheel', handlePreviewWheel, { passive: false })
+    return () => preview.removeEventListener('wheel', handlePreviewWheel)
+  }, [handlePreviewWheel])
 
 
   const handlePreviewScroll = (event: React.UIEvent<HTMLDivElement>) => {
@@ -920,7 +947,6 @@ function Viewer() {
             className={`viewer-preview-canvas${isPanning ? ' viewer-preview-panning' : ''}`}
             onClick={handlePreviewClick}
             onScroll={handlePreviewScroll}
-            onWheelCapture={handlePreviewWheel}
             onPointerDownCapture={handlePreviewPointerDown}
             onPointerMoveCapture={handlePreviewPointerMove}
             onPointerUpCapture={stopPreviewPan}
@@ -954,7 +980,7 @@ function Viewer() {
           <div className={`viewer-status-bar viewer-status-${status}`}>
             <span className="viewer-status-dot" aria-hidden="true" />
             <span>{message}</span>
-            <span className="viewer-navigation-hint">Hover highlights source · Click scrolls source · Drag to pan</span>
+            <span className="viewer-navigation-hint">Hover highlights source · Click scrolls source · Drag to pan · Ctrl + wheel to zoom</span>
           </div>
         </div>
       </section>
