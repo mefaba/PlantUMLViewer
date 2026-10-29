@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { findPreviewTargets } from './previewNavigation'
 import './Viewer.css'
 
 const starterDiagram = `@startuml
@@ -350,6 +351,7 @@ function clampSourcePanelWidth(width: number, workspaceWidth?: number) {
 function Viewer() {
   const [source, setSource] = useState(loadSavedSource)
   const [svgText, setSvgText] = useState('')
+  const [renderedSource, setRenderedSource] = useState<string | null>(null)
   const [status, setStatus] = useState<RenderState>('idle')
   const [message, setMessage] = useState('Ready to render')
   const [zoom, setZoom] = useState(100)
@@ -359,6 +361,7 @@ function Viewer() {
   const [isResizingSource, setIsResizingSource] = useState(false)
   const [sourcePanelWidth, setSourcePanelWidth] = useState<number | null>(loadSavedSourcePanelWidth)
   const [highlightedSourceRange, setHighlightedSourceRange] = useState<SourceRange | null>(null)
+  const [previewNavigation, setPreviewNavigation] = useState<{ line: number } | null>(null)
   const [editorScrollTop, setEditorScrollTop] = useState(0)
   const sanitizedSvg = useMemo(() => sanitizeSvg(svgText), [svgText])
   const svgSize = useMemo(() => getSvgSize(sanitizedSvg), [sanitizedSvg])
@@ -380,6 +383,7 @@ function Viewer() {
   const previewSpacerRef = useRef<HTMLDivElement>(null)
   const previewPositionRef = useRef<HTMLDivElement>(null)
   const previewStageRef = useRef<HTMLDivElement>(null)
+  const previewHighlightsRef = useRef<SVGSVGElement>(null)
   const viewFrameRef = useRef(0)
   const viewRef = useRef({ zoom: 100, x: 0, y: 0 })
   const diagramSizeRef = useRef({ width: 0, height: 0 })
@@ -406,8 +410,8 @@ function Viewer() {
   useEffect(() => {
     hasRenderedSvgRef.current = hasRenderedSvg
     isSourceCollapsedRef.current = isSourceCollapsed
-    sourceIndexRef.current = sourceIndex
-  }, [hasRenderedSvg, isSourceCollapsed, sourceIndex])
+    sourceIndexRef.current = renderedSource === source && status === 'ready' ? sourceIndex : []
+  }, [hasRenderedSvg, isSourceCollapsed, renderedSource, source, sourceIndex, status])
 
   const getVerticalScrollRange = useCallback((zoomLevel = viewRef.current.zoom) => {
     const preview = previewRef.current
@@ -488,6 +492,75 @@ function Viewer() {
     if (node) scheduleViewUpdate()
   }, [scheduleViewUpdate])
 
+  useEffect(() => {
+    const highlights = previewHighlightsRef.current
+    highlights?.replaceChildren()
+
+    const stage = previewStageRef.current
+    const preview = previewRef.current
+    if (
+      !highlights || !stage || !preview || !previewNavigation || isSourceCollapsed ||
+      source !== renderedSource || status !== 'ready' || !svgSize.width
+    ) return
+
+    const sourceLineOffset = Math.max(
+      0,
+      source.split('\n').findIndex((line) => /^\s*@start\w+\b/i.test(line)),
+    )
+    const targets = findPreviewTargets(
+      stage,
+      previewNavigation.line,
+      (label) => findSourceMatch(label, sourceIndex),
+      sourceLineOffset,
+    )
+    const diagramBounds = stage.getBoundingClientRect()
+    const scale = diagramBounds.width / svgSize.width
+    if (!scale) return
+
+    const targetBounds = targets
+      .map((target) => target.getBoundingClientRect())
+      .filter((bounds) => bounds.width > 0 && bounds.height > 0)
+
+    for (const bounds of targetBounds) {
+      const rectangle = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+      rectangle.setAttribute('x', String((bounds.left - diagramBounds.left) / scale - 4))
+      rectangle.setAttribute('y', String((bounds.top - diagramBounds.top) / scale - 4))
+      rectangle.setAttribute('width', String(bounds.width / scale + 8))
+      rectangle.setAttribute('height', String(bounds.height / scale + 8))
+      rectangle.setAttribute('rx', '4')
+      rectangle.setAttribute('vector-effect', 'non-scaling-stroke')
+      highlights.append(rectangle)
+    }
+
+    const viewport = preview.getBoundingClientRect()
+    const centerX = viewport.left + preview.clientWidth / 2
+    const centerY = viewport.top + preview.clientHeight / 2
+    const distanceFromCenter = (bounds: DOMRect) => Math.hypot(
+      bounds.left + bounds.width / 2 - centerX,
+      bounds.top + bounds.height / 2 - centerY,
+    )
+    const nearest = targetBounds.sort((first, second) => distanceFromCenter(first) - distanceFromCenter(second))[0]
+    if (!nearest) return
+
+    const padding = 24
+    const isVisible =
+      nearest.left >= viewport.left + padding &&
+      nearest.right <= viewport.left + preview.clientWidth - padding &&
+      nearest.top >= viewport.top + padding &&
+      nearest.bottom <= viewport.top + preview.clientHeight - padding
+    if (isVisible) return
+
+    // Move the diagram through its existing pan/scroll model without changing zoom or editor focus.
+    preservedPreviewScrollTopRef.current = null
+    const zoomScale = viewRef.current.zoom / 100
+    viewRef.current = {
+      ...viewRef.current,
+      x: (svgSize.width / 2 - (nearest.left + nearest.width / 2 - diagramBounds.left) / scale) * zoomScale,
+      y: (svgSize.height / 2 - (nearest.top + nearest.height / 2 - diagramBounds.top) / scale) * zoomScale,
+    }
+    scheduleViewUpdate()
+  }, [isSourceCollapsed, previewNavigation, renderedSource, sanitizedSvg, scheduleViewUpdate, source, sourceIndex, status, svgSize.height, svgSize.width])
+
   const renderDiagram = useCallback(async (diagramSource: string) => {
     const currentRequest = ++requestId.current
 
@@ -518,6 +591,7 @@ function Viewer() {
       const plantUmlError = response.headers.get('X-PlantUML-Error')
 
       setSvgText(renderedSvg)
+      setRenderedSource(diagramSource)
       setHighlightedSourceRange(null)
       setStatus(plantUmlError ? 'error' : 'ready')
       setMessage(
@@ -561,6 +635,7 @@ function Viewer() {
     () => () => {
       if (viewFrameRef.current) {
         window.cancelAnimationFrame(viewFrameRef.current)
+        viewFrameRef.current = 0
       }
     },
     [],
@@ -633,6 +708,13 @@ function Viewer() {
         target.selectionStart = target.selectionEnd = start + 2
       })
     }
+  }
+
+  const handleEditorSelect = (event: React.SyntheticEvent<HTMLTextAreaElement>) => {
+    const editor = event.currentTarget
+    const caret = editor.selectionDirection === 'backward' ? editor.selectionStart : editor.selectionEnd
+    setHighlightedSourceRange(null)
+    setPreviewNavigation({ line: editor.value.slice(0, caret).split('\n').length - 1 })
   }
 
   const changeZoom = (nextZoom: number) => {
@@ -764,6 +846,7 @@ function Viewer() {
 
     event.preventDefault()
     setHighlightedSourceRange(null)
+    setPreviewNavigation(null)
     didDragPreviewRef.current = false
     panStart.current = {
       pointerId: event.pointerId,
@@ -905,6 +988,8 @@ function Viewer() {
                 setSource(event.target.value)
               }}
               onKeyDown={handleEditorKeyDown}
+              onSelect={handleEditorSelect}
+              onClick={handleEditorSelect}
               onScroll={(event) => setEditorScrollTop(event.currentTarget.scrollTop)}
               wrap="off"
               spellCheck={false}
@@ -912,6 +997,7 @@ function Viewer() {
           </div>
           <div className="viewer-panel-footer">
             <span>{sourceLineCount} lines</span>
+            <span className="viewer-source-navigation-hint">Click a source line to reveal it in the preview</span>
             <span><kbd>Ctrl</kbd> + <kbd>Enter</kbd> to render</span>
           </div>
         </div>}
@@ -964,8 +1050,15 @@ function Viewer() {
                   <div
                     ref={setPreviewStageNode}
                     className="viewer-preview-stage"
-                    dangerouslySetInnerHTML={{ __html: sanitizedSvg }}
-                  />
+                  >
+                    <div className="viewer-preview-diagram" dangerouslySetInnerHTML={{ __html: sanitizedSvg }} />
+                    <svg
+                      ref={previewHighlightsRef}
+                      className="viewer-preview-highlights"
+                      viewBox={`0 0 ${svgSize.width} ${svgSize.height}`}
+                      aria-hidden="true"
+                    />
+                  </div>
                 </div>
               </>
             ) : (
